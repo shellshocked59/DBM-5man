@@ -1,6 +1,6 @@
 local tbcCthun = DBM:NewBossMod("AQTBC", DBM_CTHUN_T65_NAME, DBM_AQ40_DESCRIPTION, DBM_ZONE_AQ40, "TBC5ManTab", 7)
 
-tbcCthun.Version = "1.0"
+tbcCthun.Version = "1.01"
 tbcCthun.Author = "Jannik"
 tbcCthun.MinRevision = 1000
 
@@ -9,16 +9,27 @@ local random = math.random
 --------------------------------------------------------------------------------
 
 --TODO - add options
-tbcCthun:AddOption("WarnFankrissBreath", true, "Raid warning on Fankriss Breath")
+tbcCthun:AddOption("WarnFankrissBreath", true, "DBM warning on Fankriss Breath (only recommended for tank)")
 tbcCthun:AddOption("WarnFankrissTrap", true, "Warnings for Fankriss Trap")
-tbcCthun:AddOption("WarnPrincessTimers", false, "Princess timers - beta")
+tbcCthun:AddOption("WarnFankrissTrapWhisper", true, "Whisper warnings to others for Fanrkiss traps")
+tbcCthun:AddOption("WarnFankrissTrapHitTimers", true, "Timers for when people get hit by Fankriss traps")
+tbcCthun:AddOption("WarnPrincessTimers", true, "Princess timers - beta")
 tbcCthun:AddOption("WarnPrincessPoison", true, "Warnings for Princess poison")
 tbcCthun:AddOption("WarnPrincessReflect", true, "Warnings for Princess reflection")
+tbcCthun:AddOption("WarnPrincessBerserk", true, "Warnings for Princess going berserk at 30%")
 tbcCthun:AddOption("WarnCthunTimers", true, "Warnings for C'Thun timers")
+tbcCthun:AddOption("WarnTornado", true, "Self  warning for being in a Tornado")
+
+
+
+
+
 
 --------------------------------------------------------------------------------
 
---tbcCthun:AddBarOption("Fankriss Breath")
+tbcCthun:AddBarOption("Tentacles")
+tbcCthun:AddBarOption("Dark Glare")
+--TODO add all
 
 --------------------------------------------------------------------------------
 
@@ -56,13 +67,17 @@ local function cThunPhaseStart(self)
 	end
 
 	-- show distance
+	-- is 10 yards for eye chaining, adding 1 for safetey
+	DBM_Gui_DistanceFrame_SetDistance(11);
 	DBM_Gui_DistanceFrame_Show()
-	DBM_Gui_DistanceFrame_SetDistance(10);
+	
 
-	-- start tentacle & dark glare timer
+
+	-- TODO count number of eye beams to tell when the next dark glare will be, repeat
+
+	-- start initial tentacle & dark glare timer TODO scrap this approach and use above one
 	self:StartStatusBarTimer((16 - delay), "Tentacles", "Interface\\Icons\\spell_shadow_siphonmana");
 	self:StartStatusBarTimer((25 - delay), "Dark Glare", "Interface\\Icons\\spell_shadow_unholyfrenzy");
-	-- TODO let dark glare go for X seconds, then repeat new timers
 
 	
 
@@ -91,7 +106,7 @@ local function cThunPhaseEnd(self)
 	DBM_Gui_DistanceFrame_Hide();
 	self:EndStatusBarTimer("Tentacles")
 	self:EndStatusBarTimer("Dark Glare")
-	-- self:UnScheduleEvent("WarnNova")
+	--TODO be sure to add all C'Thun timers
 	--reset distance frame to default of 10, copied from gruuls.lua
 	DBM_Gui_DistanceFrame_SetDistance(10);
 end
@@ -106,6 +121,8 @@ function tbcCthun:OnCombatStart(delay)
 	self.CThunPhase = 1
 	-- 1 if cthun is active, else 0
 	self.CThunActive = 1
+	-- timestamp for cooldown on princess reflect
+	self.LastPrincessReflect = 0
 
 	cThunPhaseStart(self)
 end
@@ -116,6 +133,7 @@ function tbcCthun:OnCombatEnd()
 	self.Stomach = 0
 	self.CThunPhase = 1
 	self.CThunActive = 1
+	self.LastPrincessReflect = 0
 	DBM_Gui_DistanceFrame_Hide();
 	DBM_Gui_DistanceFrame_SetDistance(10);
 end
@@ -128,12 +146,13 @@ function tbcCthun:OnEvent(event, arg1, arg2, arg3, arg4, arg5)
 			self:SendSync("PrincessPoison"..arg1.destName)
 		elseif arg1.spellId == 27564 then
 			self:SendSync("PrincessReflectionStart")
-		elseif arg1.spellId == 25161 then
-			self:SendSync("WindWarning")
+		elseif arg1.spellId == 26068 then
+			self:SendSync("PrincessBerserkStart")
+		elseif arg1.spellId == 20367 then
+			self:SendSync("CThunWarnPhaseEnding")
 		end
 	elseif event == "SPELL_AURA_REFRESH" then
 		if arg1.spellId == 28431 then
-			--drop a poison and reapply  warning
 			self:SendSync("PrincessPoisonDrop"..arg1.destName)
 			self:SendSync("PrincessPoison"..arg1.destName)
 		end
@@ -159,6 +178,8 @@ function tbcCthun:OnEvent(event, arg1, arg2, arg3, arg4, arg5)
 		elseif arg1.spellId == 25656 then
 			player = arg1.destName
 			self:SendSync("WarnFankrissTrapHit"..player)
+		elseif arg1.spellId == 25161 then
+			self:SendSync("WindWarning")
 		end
 	elseif event == "UNIT_DIED" then
 		if arg1.destName == DBM_CTHUN_T65_FANKRISS_NAME then
@@ -169,11 +190,8 @@ function tbcCthun:OnEvent(event, arg1, arg2, arg3, arg4, arg5)
 			self:SendSync("StomachDown")
 		end
 
-		--deleteme, testing only
-		--SendChatMessage(arg1.destName.." Down")
 
 	-- detecting miniboss pull, should work off yells instead
-	-- detection not working yet, TODO
 	elseif event == "SWING_DAMAGE" or event == "SWING_MISSED" then
 		if self.Fankriss == 0 and arg1.sourceName == DBM_CTHUN_T65_FANKRISS_NAME then
 			self:SendSync("Fankriss")
@@ -197,12 +215,6 @@ function tbcCthun:OnSync(msg)
 		self.CThunActive = 0
 		cThunPhaseEnd(self)
 
-		--start initial  timers
-		--self:StartStatusBarTimer(20, "Breath", "Interface\\Icons\\spell_nature_lightning")
-		--self:StartStatusBarTimer(10, "Sand Trap", "Interface\\Icons\\spell_nature_earthshock")
-
-		--deleteme, testing only
-		--self:Announce("Fankriss Started")
 	elseif msg == "FankrissDown" then
 		--set fankriss to dead, activate cthun phase 2
 		self.Fankriss = 2
@@ -213,48 +225,40 @@ function tbcCthun:OnSync(msg)
 		self:EndStatusBarTimer("Breath")
 		self:EndStatusBarTimer("Sand Trap")
 
-		--deleteme, testing only
-		--self:Announce("Fankriss Down")
-
-
 	elseif msg == "WarnFankrissBreath" then 
 		self:EndStatusBarTimer("Next Breath")
 
 		if self.Options.WarnFankrissBreath then
-			self:Announce("Fankriss Breath Incoming!")
-			self:StartStatusBarTimer(3, "Incoming Breath", "Interface\\Icons\\spell_nature_lightning")
+			self:AddSpecialWarning("Fankriss Breath Incoming!")
 		end
 		
 	elseif msg == "WarnFankrissBreathEnd" then 
 
 		self:EndStatusBarTimer("Incoming Breath")
-		--self:StartStatusBarTimer(25, "Next Breath cooldown", "Interface\\Icons\\spell_nature_lightning")
 
 	elseif msg:sub(1,21) == "WarnFankrissBreathHit" then 
-		--TODO, /rw that player got hit
+		-- /rw that player got hit
 		player = msg:sub(22)
 		if self.Options.WarnFankrissBreath then
 			self:Announce(player.." was hit by sand blast!")
 		end
 	elseif msg:sub(1,19) == "WarnFankrissTrapHit" then 
-		--TODO /rw that player got it 25656
+		-- /rw that player got hit
 		player = msg:sub(20)
 
-		if self.Options.WarnFankrissTrap then
-			--TODO make this not a rw, maybe raid only
-			self:Announce(player.." was hit by sand trap!")
+		self:Announce(player.." was hit by sand trap!")
+		if self.Options.WarnFankrissTrapHitTimers then
 			self:StartStatusBarTimer(15, "Sand Trap debuff on "..player, "Interface\\Icons\\inv_misc_dust_02")
 		end
 	elseif msg:sub(1,12) == "FankrissTrap" then
 		player = msg:sub(13)
 
-		--TODO delete icon set once more people have mod
-		--self:SetIcon(player, 20);
-		
-		--self:StartStatusBarTimer(25, "Sand Trap", "Interface\\Icons\\spell_nature_earthshock")
-		if self.Options.WarnFankrissTrap then
+		if self.Options.WarnFankrissTrapWhisper then
 			self:SendHiddenWhisper("Sand Trap on you!", player)
-			
+		end
+
+
+		if self.Options.WarnFankrissTrap then
 			if UnitName("player") == player then
 				PlaySoundFile("Sound\\Spells\\PVPFlagTaken.wav"); 
 				SendChatMessage("Sand Trap on me!", "SAY")
@@ -269,12 +273,12 @@ function tbcCthun:OnSync(msg)
 		-- princess started, clear cthun
 		self.Princess = 1
 		self.CThunActive = 0
-		--self:Announce("Princess Started")
 		cThunPhaseEnd(self)
 
 		if self.Options.WarnPrincessTimers then
+			self:ScheduleAnnounce(25, "Poison Barrage soon", 1);
 			self:StartStatusBarTimer(30, "Next Poison Barrage", "Interface\\Icons\\spell_shadow_teleport")
-			self:StartStatusBarTimer(5, "Shield Bugs Spawning", "Interface\\Icons\\inv_shield_05")
+			--self:StartStatusBarTimer(45, "Summon Guards", "Interface\\Icons\\spell_shadow_teleport")
 		end
 	elseif msg == "PrincessDown" then
 		-- princess killed, start cthun
@@ -284,69 +288,86 @@ function tbcCthun:OnSync(msg)
 		cThunPhaseStart(self)
 
 		self:EndStatusBarTimer("Poison Rain")
-		self:EndStatusBarTimer("Summon Guards")
-		self:EndStatusBarTimer("Spawn Shield Bugs")
+		--self:EndStatusBarTimer("Summon Guards")
 
-
-		--deleteme, testing only
-		--self:Announce("Princess Down")
+	elseif msg:sub(1,18) == "PrincessPoisonDrop" then
+		player = msg:sub(19)
+		-- clear timer from existing
+		-- self:EndStatusBarTimer("Poisoned: "..player)
+		if self.Options.WarnPrincessPoison then
+			if UnitName("player") == player then
+				SendChatMessage("Dropped poison", "SAY")
+			end		
+		end
 
 	elseif msg:sub(1,14) == "PrincessPoison" then
 		player = msg:sub(15)
-		self:SendHiddenWhisper("You are poisoned! Drop the poison somewhere safe", player)
 
 		if self.Options.WarnPrincessPoison then
-			self:StartStatusBarTimer(9, "Poisoned: "..player, "Interface\\Icons\\spell_nature_corrosivebreath")
+			--self:StartStatusBarTimer(9, "Poisoned: "..player, "Interface\\Icons\\spell_nature_corrosivebreath")
 
 			if UnitName("player") == player then
 				self:AddSpecialWarning("Poisoned!")
 			end
 		end
 
-	elseif msg:sub(1,18) == "PrincessPoisonDrop" then
-		player = msg:sub(19)
-		-- clear timer from existing
-		self:EndStatusBarTimer("Poisoned: "..player)
-		if self.Options.WarnPrincessPoison then
-			if UnitName("player") == player then
-				SendChatMessage("Dropped poison", "SAY")
-			end		
-		end
+	
 		
 	elseif msg == "PrincessReflectionStart" then
-		--start timer for 10 seconds of poison barrage and announce
-		self:EndStatusBarTimer("Next Poison Barrage")
-		if self.Options.WarnPrincessReflect then
-			self:StartStatusBarTimer(10, "Poison Barrage", "Interface\\Icons\\spell_nature_nullifydisease")
-			self:Announce("Poison Barrage!")
+		--this event fires multiple times as reflection buff gets applied&removed for some reason, so add a cooldown on it
+		local now = GetTime()
+		if now - self.LastPrincessReflect > 16 then
+			self.LastPrincessReflect = now
+
+			--start timer for 10 seconds of poison barrage and announce
+			self:EndStatusBarTimer("Next Poison Barrage")
+			if self.Options.WarnPrincessReflect then
+				self:StartStatusBarTimer(10, "Poison Barrage", "Interface\\Icons\\spell_nature_nullifydisease")
+				self:Announce("Poison Barrage!")
+			end
 		end
 	elseif msg == "PrincessReflectionEnd" then
-		--clear timers from poison, set timer for next reflection and shield bugs
-		if self.Options.WarnPrincessTimers then
-			self:EndStatusBarTimer("Poison Barrage")
-			self:StartStatusBarTimer(60, "Next Poison Barrage", "Interface\\Icons\\spell_shadow_teleport")
-			self:StartStatusBarTimer(5, "Shield Bugs Spawning", "Interface\\Icons\\inv_shield_05")
+		--this event fires multiple times as reflection buff gets applied&removed for some reason, so use cooldown from PrincessReflectionStart but dont set new timestamp
+
+		local now = GetTime()
+		if now - self.LastPrincessReflect > 7 then
+			--clear timers from poison, set timer for next reflection and shield bugs
+			if self.Options.WarnPrincessTimers then
+				self:EndStatusBarTimer("Poison Barrage")
+				self:StartStatusBarTimer(50, "Next Poison Barrage", "Interface\\Icons\\spell_shadow_teleport")
+				self:ScheduleAnnounce(45, "Poison Barrage soon", 1);
+				--self:StartStatusBarTimer(5, "Shield Bugs Spawning", "Interface\\Icons\\inv_shield_05")
+			end
+		end
+	elseif msg == "PrincessBerserkStart" then
+		if self.Options.WarnPrincessBerserk then
+			self:Announce("Princess Huhuran goes Berserk")
 		end
 	--
-	-- TODO Stomach
+	-- Stomach
 	--
 	elseif msg == "Stomach" then
 		self.Stomach = 1
 		self.CThunActive = 0
-		--self:Announce("Stomach Started")
+
 	elseif msg == "StomachDown" then
 		self.Stomach = 2
 		self.CThunPhase = 4
 		self.CThunActive = 1
 
-		--deleteme, testing only
-		self:Announce("Stomach Down")
+	--
+	-- C'Thun
+	--
+	elseif msg == "CThunWarnPhaseEnding" then
+		self:Announce("C'Thun phase ending")
 
 	--
-	-- TODO C'Thun
+	-- Tornados
 	--
 	elseif msg == "WindWarning" then
-		self:AddSpecialWarning("In Tornado")
+		if self.Options.WarnTornado then
+			self:AddSpecialWarning("In Tornado")
+		end
 
 	end
 end
