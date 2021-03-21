@@ -9,15 +9,17 @@ local random = math.random
 --------------------------------------------------------------------------------
 
 --TODO - add options
-tbcCthun:AddOption("WarnFankrissBreath", true, "DBM warning on Fankriss Breath (only recommended for tank)")
-tbcCthun:AddOption("WarnFankrissTrap", true, "Warnings for Fankriss Trap")
-tbcCthun:AddOption("WarnFankrissTrapWhisper", true, "Whisper warnings to others for Fanrkiss traps")
+tbcCthun:AddOption("WarnFankrissBreath", false, "DBM warning on Fankriss Breath (only recommended for tank)")
+tbcCthun:AddOption("WarnFankrissBreathHit", true, "DBM announce on Fankriss Breath hits")
+tbcCthun:AddOption("WarnFankrissTrap", true, "Warnings for Fankriss Trap (disabled by yatzi)")
+tbcCthun:AddOption("WarnFankrissTrapWhisper", true, "Whisper warnings to others for Fanrkiss traps (disabled by yatzi)")
 tbcCthun:AddOption("WarnFankrissTrapHitTimers", true, "Timers for when people get hit by Fankriss traps")
 tbcCthun:AddOption("WarnPrincessTimers", true, "Princess timers - beta")
+tbcCthun:AddOption("WarnPrincessGuardTimers", true, "Princess Guard timers - beta")
 tbcCthun:AddOption("WarnPrincessPoison", true, "Warnings for Princess poison")
 tbcCthun:AddOption("WarnPrincessReflect", true, "Warnings for Princess reflection")
 tbcCthun:AddOption("WarnPrincessBerserk", true, "Warnings for Princess going berserk at 30%")
-tbcCthun:AddOption("WarnCthunTimers", true, "Warnings for C'Thun timers")
+tbcCthun:AddOption("WarnCthunTimers", false, "Warnings for C'Thun timers - beta")
 tbcCthun:AddOption("WarnTornado", true, "Self  warning for being in a Tornado")
 
 
@@ -51,16 +53,18 @@ tbcCthun:RegisterEvents(
 )
 
 tbcCthun:RegisterCombat("COMBAT", 5, DBM_CTHUN_T65_NAME);
+--register combat based on eye beam cast start
+--tbcCthun:RegisterCombat("SPELL_CAST_START", "26134", DBM_CTHUN_T65_NAME);
 
 --------------------------------------------------------------------------------
 
 --
 -- C'Thun
 --
-local function cThunPhaseStart(self)
+function tbcCthun:cThunPhaseStart()
 	percent = "90%"
 
-	--TODO remove this delay when combat start if figured out with a yell
+	--TODO remove this delay when combat start is figured out with a yell
 	delay = 0
 	if  self.CThunPhase == 1 then
 		delay = 5
@@ -76,8 +80,8 @@ local function cThunPhaseStart(self)
 	-- TODO count number of eye beams to tell when the next dark glare will be, repeat
 
 	-- start initial tentacle & dark glare timer TODO scrap this approach and use above one
-	self:StartStatusBarTimer((16 - delay), "Tentacles", "Interface\\Icons\\spell_shadow_siphonmana");
-	self:StartStatusBarTimer((25 - delay), "Dark Glare", "Interface\\Icons\\spell_shadow_unholyfrenzy");
+	--self:StartStatusBarTimer((16 - delay), "Tentacles", "Interface\\Icons\\spell_shadow_siphonmana");
+	--self:StartStatusBarTimer((25 - delay), "Dark Glare", "Interface\\Icons\\spell_shadow_unholyfrenzy");
 
 	
 
@@ -101,7 +105,7 @@ local function cThunPhaseStart(self)
 	self:Announce("C'Thun phase "..self.CThunPhase.." started until "..percent)
 end
 
-local function cThunPhaseEnd(self)
+function tbcCthun:cThunPhaseEnd()
 	-- clear all cthun timers
 	DBM_Gui_DistanceFrame_Hide();
 	self:EndStatusBarTimer("Tentacles")
@@ -117,14 +121,26 @@ function tbcCthun:OnCombatStart(delay)
 	self.Fankriss = 0
 	self.Princess = 0
 	self.Stomach = 0
-	-- tracks phase 1-4 of cthun
-	self.CThunPhase = 1
+	
 	-- 1 if cthun is active, else 0
 	self.CThunActive = 1
 	-- timestamp for cooldown on princess reflect
 	self.LastPrincessReflect = 0
 
-	cThunPhaseStart(self)
+	-- for eye beam tracking
+	self.ContinuousEyeBeams = 0
+	self.eyeBeamTimer = 0
+	self.darkGlareCounter = -1
+
+
+	--set defaults this way since initial combat start gets weird and is delayed without yells, sometime cthun loop triggers first
+	if self.ContinuousEyeBeams == nil then self.ContinuousEyeBeams = 0 end
+	if self.eyeBeamTimer == nil then self.eyeBeamTimer = 0 end
+	if self.darkGlareCounter == nil then self.darkGlareCounter = -1 end
+	-- tracks phase 1-4 of cthun
+	if self.CThunPhase == nil then self.CThunPhase = 1 end
+
+	self:cThunPhaseStart()
 end
 function tbcCthun:OnCombatEnd()
 	-- clean up, set all variables to default
@@ -134,8 +150,14 @@ function tbcCthun:OnCombatEnd()
 	self.CThunPhase = 1
 	self.CThunActive = 1
 	self.LastPrincessReflect = 0
+	self.ContinuousEyeBeams = 0
+	self.eyeBeamTimer = 0
+	self.darkGlareCounter = -1
 	DBM_Gui_DistanceFrame_Hide();
 	DBM_Gui_DistanceFrame_SetDistance(10);
+
+	self:UnScheduleEvent("WarnPrincessGuards")
+	self:UnScheduleEvent("WarnPrincessGuardsDespawn")
 end
 
 function tbcCthun:OnEvent(event, arg1, arg2, arg3, arg4, arg5)
@@ -170,7 +192,11 @@ function tbcCthun:OnEvent(event, arg1, arg2, arg3, arg4, arg5)
 			self:SendSync("FankrissTrap"..player)
 		end
 	elseif event == "SPELL_CAST_START" then
-		
+		if arg1.spellId == 26134 then
+			--self:SendSync("EyeBeamLoop") --disabled, need to wait for yatzi to implement yells
+		elseif arg1.spellId == 27137 then -- TESTING ONLY
+			self:SendSync("Princess")
+		end
 	elseif event == "SPELL_DAMAGE" then
 		if arg1.spellId == 26102 then
 			player = arg1.destName
@@ -200,7 +226,18 @@ function tbcCthun:OnEvent(event, arg1, arg2, arg3, arg4, arg5)
 		elseif self.Stomach == 0 and arg1.sourceName == DBM_CTHUN_T65_STOMACH_NAME then
 			self:SendSync("Stomach")
 		end
+
+	-- custom event loop for princess guard spawns
+	elseif(self.Princess == 1) then 
+		if event == "WarnPrincessGuards" then
+			self:StartStatusBarTimer(10, "Summon Guards", "Interface\\Icons\\spell_shadow_teleport")
+			self:ScheduleEvent(10, "WarnPrincessGuardsDespawn")
+		elseif event == "WarnPrincessGuardsDespawn" then
+			self:StartStatusBarTimer(30, "Guards Despawn", "Interface\\Icons\\spell_shadow_possession")
+		end
 	end
+
+
 
 end
 
@@ -213,14 +250,14 @@ function tbcCthun:OnSync(msg)
 		--set  fankriss to active, deactive cthun
 		self.Fankriss = 1
 		self.CThunActive = 0
-		cThunPhaseEnd(self)
+		self:cThunPhaseEnd()
 
 	elseif msg == "FankrissDown" then
 		--set fankriss to dead, activate cthun phase 2
 		self.Fankriss = 2
 		self.CThunPhase = 2
 		self.CThunActive = 1
-		cThunPhaseStart(self)
+		self:cThunPhaseStart()
 
 		self:EndStatusBarTimer("Breath")
 		self:EndStatusBarTimer("Sand Trap")
@@ -229,7 +266,8 @@ function tbcCthun:OnSync(msg)
 		self:EndStatusBarTimer("Next Breath")
 
 		if self.Options.WarnFankrissBreath then
-			self:AddSpecialWarning("Fankriss Breath Incoming!")
+			self:AddSpecialWarning("Breath Incoming!")
+			PlaySoundFile("Sound\\Doodad\\BellTollNightElf.wav");
 		end
 		
 	elseif msg == "WarnFankrissBreathEnd" then 
@@ -239,7 +277,7 @@ function tbcCthun:OnSync(msg)
 	elseif msg:sub(1,21) == "WarnFankrissBreathHit" then 
 		-- /rw that player got hit
 		player = msg:sub(22)
-		if self.Options.WarnFankrissBreath then
+		if self.Options.WarnFankrissBreathHit then
 			self:Announce(player.." was hit by sand blast!")
 		end
 	elseif msg:sub(1,19) == "WarnFankrissTrapHit" then 
@@ -270,25 +308,41 @@ function tbcCthun:OnSync(msg)
 	-- Princess
 	--
 	elseif msg == "Princess" then
+		SendChatMessage("Dropped poison", "SAY") --DELETEME
 		-- princess started, clear cthun
 		self.Princess = 1
 		self.CThunActive = 0
-		cThunPhaseEnd(self)
+		self:cThunPhaseEnd()
 
 		if self.Options.WarnPrincessTimers then
 			self:ScheduleAnnounce(25, "Poison Barrage soon", 1);
 			self:StartStatusBarTimer(30, "Next Poison Barrage", "Interface\\Icons\\spell_shadow_teleport")
-			--self:StartStatusBarTimer(45, "Summon Guards", "Interface\\Icons\\spell_shadow_teleport")
+		end
+
+		if self.Options.WarnPrincessGuardTimers then
+			--schedule warning events for future guards
+			guards_delay = 2 --adjusts all timers by this amount
+			next_guard_delay = 40 --time between guards
+			for i = 1,10,1
+			do
+				start_event_time = guards_delay + (next_guard_delay * i) - 10 -- subtract 10 to start timers when last set despawns
+				SendChatMessage(start_event_time, "SAY") --DELETEME
+				self:ScheduleEvent(start_event_time, "WarnPrincessGuards")
+			end 
 		end
 	elseif msg == "PrincessDown" then
 		-- princess killed, start cthun
 		self.Princess = 2
 		self.CThunPhase = 3
 		self.CThunActive = 1
-		cThunPhaseStart(self)
+		self:cThunPhaseStart()
 
 		self:EndStatusBarTimer("Poison Rain")
-		--self:EndStatusBarTimer("Summon Guards")
+		self:EndStatusBarTimer("Summon Guards")
+		self:EndStatusBarTimer("Guards Despawn")
+
+		self:UnScheduleEvent("WarnPrincessGuards")
+		self:UnScheduleEvent("WarnPrincessGuardsDespawn")
 
 	elseif msg:sub(1,18) == "PrincessPoisonDrop" then
 		player = msg:sub(19)
@@ -360,7 +414,68 @@ function tbcCthun:OnSync(msg)
 	--
 	elseif msg == "CThunWarnPhaseEnding" then
 		self:Announce("C'Thun phase ending")
+	elseif msg == "EyeBeamLoop" then
+		--TODO deactivated this whole section, is extremely buggy, gonna wait for Yatzi to implement yells
+		SendChatMessage("loopin")
+		--fires each time eye beam cast is started
+		--track how many eye beams are fired in a row to predict dark glares
 
+		--set defaults since initial combat start gets weird and is delayed without yells
+		if self.ContinuousEyeBeams == nil then self.ContinuousEyeBeams = 0 end
+		if self.eyeBeamTimer == nil then self.eyeBeamTimer = 0 end
+		if self.darkGlareCounter == nil then self.darkGlareCounter = -1 end
+		if self.CThunPhase == nil then self.CThunPhase = 1 end
+		
+		if self.ContinuousEyeBeams == 0 then
+			--first eye beam in a while, add timers
+		end
+
+		--its been a while since eye beams  have  fired or its first eye beam, indicating a dark glare, reset count
+		local now = GetTime()
+		if now - self.eyeBeamTimer > 16 then
+			self.eyeBeamTimer = now
+			self.ContinuousEyeBeams = 1
+			self.darkGlareCounter = self.darkGlareCounter +1
+		else
+			--add to eye beam counter
+			self.ContinuousEyeBeams = self.ContinuousEyeBeams + 1
+		end
+
+		SendChatMessage("ContinuousEyeBeams"..tostring(self.ContinuousEyeBeams), "SAY")
+
+		if self.Options.WarnCthunTimers then
+			--first eye beam, start some timers
+			if self.ContinuousEyeBeams == 1 then
+				beamsTillTentacles = 0
+				beamsTillGlare = 0
+				eyeBeamCastTime = 2
+				if self.CThunPhase == 1 then
+					beamsTillTentacles = 6
+					beamsTillGlare = 10
+				end
+				if self.CThunPhase >= 2 then
+					--warning, these numbers have some RNG attached. have seen it  be  2-4 on tentacles, 7-8  on dark glare
+					beamsTillTentacles = 2
+					beamsTillGlare = 7
+				end
+				if self.CThunPhase >= 3 then
+					--TODO needs more data
+				end
+				if self.CThunPhase >= 3 then
+					--TODO needs more data
+				end
+
+
+				SendChatMessage(tostring(eyeBeamCastTime * beamsTillTentacles))
+				SendChatMessage('starting timers')
+				sendChatMessage('beamsTillTentacles')
+				self:StartStatusBarTimer((eyeBeamCastTime * beamsTillTentacles), "Tentacles soon", "Interface\\Icons\\spell_shadow_shadowfiend");
+				self:StartStatusBarTimer((eyeBeamCastTime * beamsTillGlare), "Dark Glare soon", "Interface\\Icons\\spell_shadow_siphonmana");
+			end
+
+		end
+
+		
 	--
 	-- Tornados
 	--
